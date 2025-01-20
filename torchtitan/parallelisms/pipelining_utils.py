@@ -5,18 +5,31 @@
 # LICENSE file in the root directory of this source tree.
 from typing import Tuple
 
-from torch.distributed.pipelining.schedules import (
-    get_schedule_class,
-    PipelineScheduleMulti,
-    PipelineScheduleSingle,
+import torch
+if '2.5' in torch.__version__:
+    from torch.distributed.pipelining.schedules import (
+        get_schedule_class,
+        PipelineScheduleMulti,
+        PipelineScheduleSingle,
 )
+else:
+    from torch.distributed.pipelining.schedules import (
+        PipelineScheduleMulti,
+        PipelineScheduleSingle,
+    )
+    
 from torchtitan.logging import logger
 
 
 def generate_split_points(job_config, pp_dim, model_config):
-    schedule_class = get_schedule_class(
-        job_config.experimental.pipeline_parallel_schedule
-    )
+    
+    # torch 2.4.1 doesn't havve schedule_class yet
+    if job_config.job.use_hpu:
+        schedule_class = PipelineScheduleSingle
+    else:
+        schedule_class = get_schedule_class(
+            job_config.experimental.pipeline_parallel_schedule
+        )
     if issubclass(schedule_class, PipelineScheduleSingle):
         num_stages_per_rank = 1
     elif issubclass(schedule_class, PipelineScheduleMulti):
@@ -56,9 +69,13 @@ This may be sub-optimal as the number of layers per stage may be unbalanced."
 
 
 def build_pipeline_schedule(job_config, stages, loss_fn):
-    schedule_class = get_schedule_class(
-        job_config.experimental.pipeline_parallel_schedule
-    )
+    # torch 2.4.1 doesn't havve schedule_class yet
+    if job_config.job.use_hpu:
+        schedule_class = PipelineScheduleSingle
+    else:
+        schedule_class = get_schedule_class(
+            job_config.experimental.pipeline_parallel_schedule
+        )
     if schedule_class in [PipelineScheduleSingle, PipelineScheduleMulti]:
         raise ValueError(
             f"{schedule_class} is not supported as we do not support custom CSV schedules."

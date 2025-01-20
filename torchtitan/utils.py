@@ -17,14 +17,18 @@ import torch.distributed.distributed_c10d as c10d
 from torch.distributed.device_mesh import DeviceMesh
 from torchtitan.logging import logger
 
+import habana_frameworks.torch.distributed.hccl
+
 
 def dist_max(x: Union[int, float], mesh: DeviceMesh) -> float:
-    tensor = torch.tensor(x).cuda()
+    #tensor = torch.tensor(x).cuda()
+    tensor = torch.tensor(x).to("hpu")
     return funcol.all_reduce(tensor, reduceOp=c10d.ReduceOp.MAX.name, group=mesh).item()
 
 
 def dist_mean(x: Union[int, float], mesh: DeviceMesh) -> float:
-    tensor = torch.tensor(x).cuda()
+    #tensor = torch.tensor(x).cuda()
+    tensor = torch.tensor(x).to("hpu")
     return funcol.all_reduce(tensor, reduceOp=c10d.ReduceOp.AVG.name, group=mesh).item()
 
 
@@ -117,9 +121,14 @@ def init_distributed(job_config):
         os.makedirs(dump_dir, exist_ok=True)
         _warn_overwrite_env(TRACE_FILE, f"{dump_dir}/rank_")
 
-    torch.distributed.init_process_group(
-        "nccl", timeout=timedelta(seconds=job_config.comm.init_timeout_seconds)
-    )
+    if job_config.job.use_hpu:
+        torch.distributed.init_process_group(
+            "hccl", timeout=timedelta(seconds=job_config.comm.init_timeout_seconds)
+        )
+    else:
+        torch.distributed.init_process_group(
+            "nccl", timeout=timedelta(seconds=job_config.comm.init_timeout_seconds)
+        )
 
     # to mitigate the memory issue that collectives using
     # async_op=True hold memory longer than they should

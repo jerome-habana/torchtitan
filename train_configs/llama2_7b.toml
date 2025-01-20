@@ -3,6 +3,7 @@
 [job]
 dump_folder = "./outputs"
 description = "Llama2 7B training"
+use_hpu = true
 
 [profiling]
 enable_profiling = true
@@ -18,7 +19,8 @@ save_tb_folder = "tb"
 name = "llama2"
 flavor = "7B"
 norm_type = "rmsnorm"  # layernorm / np_layernorm / rmsnorm / fused_rmsnorm
-tokenizer_path = "./torchtitan/datasets/tokenizer/tokenizer.model"
+# tokenizer_path = "./torchtitan/datasets/tokenizer/tokenizer.model"
+tokenizer_path = "/software/users/janand/tokenizer/tokenizer.model"
 
 [optimizer]
 name = "AdamW"
@@ -49,7 +51,7 @@ export_dtype = "float32"
 async_mode = "disabled" # ["disabled", "async", "async_with_pinned_mem"]
 
 [activation_checkpoint]
-mode = 'selective'  # ['none', 'selective', 'full']
+mode = 'none'  # ['none', 'selective', 'full']
 selective_ac_option = 'op'  # 'int' = ac every positive int layer or 'op', ac based on ops policy
 
 [float8]

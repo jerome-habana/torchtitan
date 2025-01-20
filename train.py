@@ -28,6 +28,7 @@ from torchtitan.parallelisms import (
 )
 from torchtitan.profiling import maybe_enable_memory_snapshot, maybe_enable_profiling
 
+global hpu_available
 
 def get_train_context(enable_loss_parallel: bool, enable_compiled_autograd: bool):
     @contextlib.contextmanager
@@ -47,6 +48,7 @@ def get_train_context(enable_loss_parallel: bool, enable_compiled_autograd: bool
 # Enable debug tracing on failure: https://pytorch.org/docs/stable/elastic/errors.html
 @record
 def main(job_config: JobConfig):
+    hpu_available = job_config.job.use_hpu
     init_logger()
     logger.info(f"Starting job: {job_config.job.description}")
 
@@ -75,16 +77,27 @@ def main(job_config: JobConfig):
         world_size=world_size,
         enable_loss_parallel=job_config.training.enable_loss_parallel,
     )
-    device = torch.device(f"cuda:{int(os.environ['LOCAL_RANK'])}")
-    torch.cuda.set_device(device)
+    if hpu_available:
+        device = torch.device(f"hpu:{int(os.environ['LOCAL_RANK'])}")
+    else:
+        device = torch.device(f"cuda:{int(os.environ['LOCAL_RANK'])}")
+        torch.cuda.set_device(device)
+
     utils.init_distributed(job_config)
-    # initialize GPU memory monitor and get peak flops for MFU calculation
-    gpu_memory_monitor = build_gpu_memory_monitor()
-    gpu_peak_flops = utils.get_peak_flops(gpu_memory_monitor.device_name)
-    logger.info(f"Peak FLOPS used for computing MFU: {gpu_peak_flops:.3e}")
+    
+    if hpu_available:
+        print("TBD : hpu memory monitor needs to be integrated")
+    else:
+        # initialize GPU memory monitor and get peak flops for MFU calculation
+        gpu_memory_monitor = build_gpu_memory_monitor()
+        gpu_peak_flops = utils.get_peak_flops(gpu_memory_monitor.device_name)
+        logger.info(f"Peak FLOPS used for computing MFU: {gpu_peak_flops:.3e}")
 
     # build meshes
-    world_mesh = parallel_dims.build_mesh(device_type="cuda")
+    if hpu_available:
+        world_mesh = parallel_dims.build_mesh(device_type="hpu")
+    else:
+        world_mesh = parallel_dims.build_mesh(device_type="cuda")
     if parallel_dims.dp_enabled:
         dp_mesh = world_mesh["dp"]
         dp_degree, dp_rank = dp_mesh.size(), dp_mesh.get_local_rank()
@@ -162,7 +175,10 @@ def main(job_config: JobConfig):
         for m in model_parts:
             # apply SPMD-style PT-D techniques
             models_parallelize_fns[model_name](m, world_mesh, parallel_dims, job_config)
-            m.to_empty(device="cuda")
+            if hpu_available:
+                m.to_empty(device="hpu")
+            else:
+                m.to_empty(device="cuda")
             m.init_weights()
             m.train()
     else:
@@ -170,19 +186,27 @@ def main(job_config: JobConfig):
         models_parallelize_fns[model_name](model, world_mesh, parallel_dims, job_config)
 
         # move sharded model to CPU/GPU and initialize weights via DTensor
-        init_device = "cpu" if job_config.checkpoint.create_seed_checkpoint else "cuda"
-        model.to_empty(device=init_device)
+        if hpu_available:
+            init_device = "cpu" if job_config.checkpoint.create_seed_checkpoint else "hpu"
+            model.to(device=init_device)
+            #model.to_empty(device=init_device)
+        else:
+            init_device = "cpu" if job_config.checkpoint.create_seed_checkpoint else "cuda"
+            model.to_empty(device=init_device)
         model.init_weights()
         model.train()
 
         model_parts = [model]
 
-    gpu_mem_stats = gpu_memory_monitor.get_peak_stats()
-    logger.info(
-        f"GPU memory usage for model: "
-        f"{gpu_mem_stats.max_reserved_gib:.2f}GiB"
-        f"({gpu_mem_stats.max_reserved_pct:.2f}%)"
-    )
+    if hpu_available:
+        print("TBD : hpu memory monitor needs to be integrated")
+    else:
+        gpu_mem_stats = gpu_memory_monitor.get_peak_stats()
+        logger.info(
+            f"GPU memory usage for model: "
+            f"{gpu_mem_stats.max_reserved_gib:.2f}GiB"
+            f"({gpu_mem_stats.max_reserved_pct:.2f}%)"
+        )
 
     # build optimizer after applying parallelisms to the model
     optimizers = build_optimizers(model_parts, job_config)
@@ -242,7 +266,10 @@ def main(job_config: JobConfig):
     ntokens_since_last_log = 0
     data_loading_times = []
     time_last_log = time.perf_counter()
-    gpu_memory_monitor.reset_peak_stats()
+    if hpu_available:
+        print("TBD : hpu memory monitor needs to be integrated")
+    else:
+        gpu_memory_monitor.reset_peak_stats()
 
     checkpoint.reset()
 
@@ -271,8 +298,13 @@ def main(job_config: JobConfig):
             ntokens_since_last_log += labels.numel()
             data_loading_times.append(time.perf_counter() - data_load_start)
 
-            input_ids = input_ids.cuda()
-            labels = labels.cuda()
+            if hpu_available:
+                input_ids = input_ids.to("hpu")
+                labels = labels.to("hpu")
+            else:
+                input_ids = input_ids.cuda()
+                labels = labels.cuda()
+
             optimizers.zero_grad()
 
             if parallel_dims.pp_enabled:
@@ -359,7 +391,10 @@ def main(job_config: JobConfig):
                 time_data_loading = sum(data_loading_times) / len(data_loading_times)
                 time_data_loading_pct = 100 * sum(data_loading_times) / time_delta
 
-                gpu_mem_stats = gpu_memory_monitor.get_peak_stats()
+                if hpu_available:
+                    print("TBD : hpu memory monitor needs to be integrated")
+                else:
+                    gpu_mem_stats = gpu_memory_monitor.get_peak_stats()
 
                 metrics = {
                     "loss_metrics/global_avg_loss": global_avg_loss,
@@ -391,7 +426,10 @@ def main(job_config: JobConfig):
                 ntokens_since_last_log = 0
                 data_loading_times.clear()
                 time_last_log = time.perf_counter()
-                gpu_memory_monitor.reset_peak_stats()
+                if hpu_available:
+                    print("TBD : hpu memory monitor needs to be integrated")
+                else:
+                    gpu_memory_monitor.reset_peak_stats()
 
             checkpoint.save(
                 train_state.step, force=(train_state.step == job_config.training.steps)
